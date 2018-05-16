@@ -16,24 +16,10 @@ import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import java.util.List;
-import java.lang.Object;
-
-
+import com.o3dr.android.client.ControlTower;
 import com.o3dr.android.client.Drone;
+import com.o3dr.android.client.apis.ControlApi;
 import com.o3dr.android.client.apis.VehicleApi;
-import com.o3dr.services.android.lib.drone.connection.ConnectionParameter;
-import com.o3dr.services.android.lib.drone.connection.ConnectionType;
-import com.o3dr.services.android.lib.drone.connection.ConnectionResult;
-import com.o3dr.services.android.lib.model.SimpleCommandListener;
-import com.o3dr.services.android.lib.drone.property.Altitude;
-import com.o3dr.services.android.lib.drone.property.Gps;
-import com.o3dr.services.android.lib.drone.property.Home;
-import com.o3dr.services.android.lib.drone.property.Speed;
-import com.o3dr.services.android.lib.drone.property.State;
-import com.o3dr.services.android.lib.drone.property.Type;
-import com.o3dr.services.android.lib.drone.property.VehicleMode;
-import com.o3dr.services.android.lib.model.AbstractCommandListener;
 import com.o3dr.android.client.apis.solo.SoloCameraApi;
 import com.o3dr.android.client.interfaces.DroneListener;
 import com.o3dr.android.client.interfaces.TowerListener;
@@ -43,29 +29,40 @@ import com.o3dr.services.android.lib.drone.attribute.AttributeEvent;
 import com.o3dr.services.android.lib.drone.attribute.AttributeType;
 import com.o3dr.services.android.lib.drone.companion.solo.SoloAttributes;
 import com.o3dr.services.android.lib.drone.companion.solo.SoloState;
-import com.o3dr.android.client.apis.ControlApi;
-import com.o3dr.android.client.ControlTower;
+import com.o3dr.services.android.lib.drone.connection.ConnectionParameter;
+import com.o3dr.services.android.lib.drone.connection.ConnectionType;
+import com.o3dr.services.android.lib.drone.property.Altitude;
+import com.o3dr.services.android.lib.drone.property.Gps;
+import com.o3dr.services.android.lib.drone.property.Home;
+import com.o3dr.services.android.lib.drone.property.Speed;
+import com.o3dr.services.android.lib.drone.property.State;
+import com.o3dr.services.android.lib.drone.property.Type;
+import com.o3dr.services.android.lib.drone.property.VehicleMode;
+import com.o3dr.services.android.lib.model.AbstractCommandListener;
+import com.o3dr.services.android.lib.model.SimpleCommandListener;
 
-import static com.o3dr.services.android.lib.drone.property.VehicleMode.getVehicleModePerDroneType;
+import java.util.List;
 
 
-public class MainActivity extends AppCompatActivity implements TowerListener {
+public class MainActivity extends AppCompatActivity implements TowerListener, DroneListener {
+
+    private static final String TAG = MainActivity.class.getSimpleName();
 
     //initialize variables
-    Drone drone;
-    int droneType = Type.TYPE_UNKNOWN;
-    ControlTower controlTower;
-    Handler handler = new Handler();
+    private Drone drone;
+    private int droneType = Type.TYPE_UNKNOWN;
+    private ControlTower controlTower;
+    private final Handler handler = new Handler();
 
     //may not need below
-    int DEFAULT_UDP_PORT = 14550;
-    int DEFAULT_USB_BAUD_RATE = 57600;
+    private static final int DEFAULT_UDP_PORT = 14550;
+    private static final int DEFAULT_USB_BAUD_RATE = 57600;
 
-    Spinner modeSelector;
-    Button startVideoStream;
-    Button stopVideoStream;
+    private Spinner modeSelector;
+    private Button startVideoStream;
+    private Button stopVideoStream;
 
-    String TAG = MainActivity.class.getSimpleName();
+
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -77,13 +74,159 @@ public class MainActivity extends AppCompatActivity implements TowerListener {
         this.drone = new Drone(context);
 
         //need to create a button for spinner and then continue
-        //this.modeSelector = (Spinner) findViewById(R.id.modeSelect);
+        this.modeSelector = (Spinner) findViewById(R.id.modeSelect);
+        this.modeSelector.setOnItemSelectedListener(new Spinner.OnItemSelectedListener(){
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view, int position, long id){
+                onFlightModeSelected(view);
+            }
+            @Override
+            public void onNothingSelected(AdapterView<?> parent){
+                //do nothing
+            }
+        });
+
+        //for Go Pro camera
+        final Button takePic = (Button) findViewById(R.id.take_photo_button);
+        takePic.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                takePhoto();
+            }
+        });
+
+        //for Go Pro video recording
+        final Button toggleVideo = (Button) findViewById(R.id.toggle_video_recording);
+        toggleVideo.setOnClickListener(new View.OnClickListener(){
+            @Override
+            public void onClick(View view){
+                toggleVideoRecording();
+            }
+        });
 
         //need to fix layout with buttons
-        //TextureView videoView = (TextureView) findViewById(R.id.video_content);
+        final TextureView videoView = (TextureView) findViewById(R.id.video_content);
+        videoView.setSurfaceTextureListener(new TextureView.SurfaceTextureListener() {
+            @Override
+            public void onSurfaceTextureAvailable(SurfaceTexture surfaceTexture, int width, int height) {
+                alertUser("Video display is available");
+                startVideoStream.setEnabled(true);
+            }
+
+            @Override
+            public void onSurfaceTextureSizeChanged(SurfaceTexture surfaceTexture, int width, int height) {
+                //anything???
+            }
+
+            @Override
+            public boolean onSurfaceTextureDestroyed(SurfaceTexture surfaceTexture) {
+                startVideoStream.setEnabled(false);
+                return true;
+            }
+
+            @Override
+            public void onSurfaceTextureUpdated(SurfaceTexture surfaceTexture) {
+                //anything???
+            }
+        });
+
+        //setting up the button to activate video streaming
+        startVideoStream = (Button) findViewById(R.id.start_video_stream);
+        startVideoStream.setEnabled(false);
+        startVideoStream.setOnClickListener(new View.OnClickListener(){
+            @Override
+            public void onClick(View view){
+                alertUser("start video streaming");
+                startVideoStream(new Surface(videoView.getSurfaceTexture()));
+            }
+        });
+
+        //setting up the button to stop video streaming
+        stopVideoStream = (Button) findViewById(R.id.stop_video_stream);
+        stopVideoStream.setEnabled(false);
+        stopVideoStream.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                alertUser("Stopping video streaming");
+                stopVideoStream();
+            }
+        });
 
     }//end onCreate
 
+    private void startVideoStream(Surface videoSurface) {
+        SoloCameraApi.getApi(drone).startVideoStream(videoSurface, "", true, new AbstractCommandListener() {
+            @Override
+            public void onSuccess() {
+                if(stopVideoStream != null)
+                    stopVideoStream.setEnabled(true);
+
+                if(startVideoStream != null)
+                    startVideoStream.setEnabled(false);
+            }
+
+            @Override
+            public void onError(int executionError) {
+                alertUser("Error while starting the video stream" + executionError);
+            }
+
+            @Override
+            public void onTimeout() {
+                alertUser("Timeout while starting the video stream");
+            }
+        });
+    }
+
+    private void stopVideoStream(){
+        SoloCameraApi.getApi(drone).stopVideoStream(new SimpleCommandListener(){
+            @Override
+            public void onSuccess(){
+                if(stopVideoStream != null)
+                    stopVideoStream.setEnabled(false);
+
+                if(startVideoStream != null)
+                    startVideoStream.setEnabled(true);
+            }
+        });
+    }
+
+    private void toggleVideoRecording() {
+        SoloCameraApi.getApi(drone).toggleVideoRecording(new AbstractCommandListener() {
+            @Override
+            public void onSuccess() {
+                alertUser("Video recording toggled");
+            }
+
+            @Override
+            public void onError(int executionError) {
+                alertUser("Error while trying to toggle video recording..." + executionError);
+            }
+
+            @Override
+            public void onTimeout() {
+                alertUser("Timeout while trying to toggle video recording");
+            }
+        });
+    }
+
+    private void takePhoto() {
+        SoloCameraApi.getApi(drone).takePhoto(new AbstractCommandListener() {
+            @Override
+            public void onSuccess() {
+                alertUser("Photo taken...");
+            }
+
+            @Override
+            public void onError(int executionError) {
+                alertUser("Error while trying to take the photo" + executionError);
+            }
+
+            @Override
+            public void onTimeout() {
+                alertUser("Timeout whiel trying to take take the photo");
+            }
+        });
+    }
 
 
     @Override
@@ -125,7 +268,7 @@ public class MainActivity extends AppCompatActivity implements TowerListener {
     public void onTowerConnected(){
         alertUser("3DR Services Connected");
         this.controlTower.registerDrone(this.drone, this.handler);
-        this.drone.registerDroneListener((DroneListener) this);
+        this.drone.registerDroneListener(this);
     }
 
     @Override
@@ -389,4 +532,8 @@ public class MainActivity extends AppCompatActivity implements TowerListener {
 
     }
 
+    @Override
+    public void onPointerCaptureChanged(boolean hasCapture) {
+
+    }
 }//end class
